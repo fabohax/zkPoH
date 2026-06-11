@@ -1,0 +1,6 @@
+[package]
+name = "zk_proof_of_hodl"
+type = "bin"
+authors = [""]
+
+[dependencies]
