@@ -1,1 +1,0 @@
-/home/fabohax/Documents/zkPoH/target/debug/zk-proof-of-hodl: /home/fabohax/Documents/zkPoH/src/main.rs /home/fabohax/Documents/zkPoH/src/prover.rs /home/fabohax/Documents/zkPoH/src/snapshot_builder.rs /home/fabohax/Documents/zkPoH/src/verifier.rs

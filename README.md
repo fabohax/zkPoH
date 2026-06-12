@@ -1,12 +1,12 @@
-# zk-proof-of-hodl
+# zkPoH: Zero Knowledge Proof-of-Hodl
 
-A proof-of-concept demonstrating how to use **Noir** to generate a zero-knowledge proof that a user controls Bitcoin UTXOs with a combined value greater than **1 BTC**, without revealing which UTXOs they own.
+A proof-of-concept demonstrating how to use **Noir** to prove that selected Bitcoin UTXOs have a combined value of at least **1 BTC**, without revealing which UTXOs they are.
 
 ## Overview
 
 The prover generates a proof for the following statement:
 
-> I know a set of Bitcoin UTXOs belonging to a committed Bitcoin snapshot whose combined value exceeds 100,000,000 sats.
+> I know a set of Bitcoin UTXOs belonging to a committed Bitcoin snapshot whose combined value is at least 100,000,000 sats.
 
 The verifier learns only that the statement is true.
 
@@ -23,6 +23,15 @@ The proof does not reveal:
 ⚠️ Experimental educational project.
 
 This repository prioritizes simplicity and portability over production readiness.
+
+Current implementation status:
+
+* Rust can load the sample snapshot and generate `Prover.toml`.
+* Noir verifies a fixed two-UTXO, one-level Merkle proof.
+* Noir enforces `sum(values) >= 100_000_000`.
+* Tests cover valid input, below-threshold input, and a wrong Merkle path.
+* The prototype Merkle tree uses Blake2s over fixed byte encodings.
+* Bitcoin ownership is still assumed, not proven.
 
 ## Architecture
 
@@ -113,7 +122,7 @@ merkle_root
 Constraint:
 
 ```
-compute_root(leaf, path) == merkle_root
+blake2s(left_digest || right_digest) == merkle_root
 ```
 
 ### Threshold Verification
@@ -168,38 +177,44 @@ Build the Noir circuit:
 nargo check
 ```
 
-Execute with example inputs:
+Generate witness inputs from the sample snapshot:
+
+```bash
+cargo run -- build-witness
+```
+
+Execute the circuit constraints with example inputs:
 
 ```bash
 nargo execute
 ```
 
-Generate a proof:
+Run the Rust and Noir tests:
 
 ```bash
-nargo prove
+cargo test
+nargo test
 ```
 
-Verify the proof:
+Run the prototype end-to-end constraint check:
 
 ```bash
-nargo verify
+cargo run -- prove
 ```
 
 ## Example
 
-Given the following private UTXOs:
+Given the sample private UTXOs:
 
 ```
 0.42 BTC
-0.33 BTC
-0.38 BTC
+0.58 BTC
 ```
 
 The circuit computes:
 
 ```
-0.42 + 0.33 + 0.38 = 1.13 BTC
+0.42 + 0.58 = 1.00 BTC
 ```
 
 Since:
@@ -218,8 +233,8 @@ The prover controls at least 1 BTC.
 
 ## Roadmap
 
-* [ ] Merkle membership proofs
-* [ ] 1 BTC threshold proof
+* [x] Prototype Merkle membership proofs
+* [x] Prototype 1 BTC threshold proof
 * [ ] Bitcoin regtest snapshot generation
 * [ ] Schnorr ownership gadget
 * [ ] Arbitrary threshold support
