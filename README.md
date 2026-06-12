@@ -158,8 +158,8 @@ Future versions may include:
 Clone the repository:
 
 ```bash
-git clone https://github.com/<username>/zk-proof-of-hodl.git
-cd zk-proof-of-hodl
+git clone https://github.com/fabohax/zkPoH.git
+cd zkPoH
 ```
 
 Build the Noir circuit:
