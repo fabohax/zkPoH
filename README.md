@@ -289,7 +289,7 @@ This should solve the Noir witness and report a total of `100000000` sats.
 
 ### 6. Create Fresh Regtest UTXOs
 
-Start a local regtest node:
+Start a local regtest node if one is not already running:
 
 ```bash
 bitcoind -regtest -daemon -fallbackfee=0.0001
@@ -327,7 +327,30 @@ TXID=$(bitcoin-cli -regtest -rpcwallet=zkpoh-regtest sendmany "" \
 bitcoin-cli -regtest generatetoaddress 1 "$MINING_ADDR"
 ```
 
-List the two UTXOs:
+Generate a zkPoH snapshot automatically from the wallet's spendable confirmed
+UTXOs:
+
+```bash
+cargo run -- snapshot-regtest \
+  --wallet zkpoh-regtest \
+  --output snapshots/regtest_utxo_snapshot.json
+```
+
+The command selects the smallest pair of safe, spendable, confirmed UTXOs whose
+combined value meets the threshold. The current circuit expects exactly two
+UTXOs, so the snapshot generator writes exactly two entries.
+
+Then generate and execute the witness:
+
+```bash
+cargo run -- prove \
+  --snapshot snapshots/regtest_utxo_snapshot.json \
+  --output Prover.regtest.toml
+```
+
+#### Manual Snapshot Check
+
+To inspect or build the snapshot manually, list the two UTXOs:
 
 ```bash
 bitcoin-cli -regtest -rpcwallet=zkpoh-regtest listunspent \
@@ -374,7 +397,7 @@ bitcoin-cli -regtest gettxout "$TXID" "$VOUT_B"
 Then run:
 
 ```bash
-cargo run -- prove --snapshot snapshots/regtest_utxo_snapshot.json --output Prover.toml
+cargo run -- prove --snapshot snapshots/regtest_utxo_snapshot.json --output Prover.regtest.toml
 ```
 
 ### 7. Try Failure Cases
