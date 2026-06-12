@@ -400,7 +400,71 @@ Then run:
 cargo run -- prove --snapshot snapshots/regtest_utxo_snapshot.json --output Prover.regtest.toml
 ```
 
-### 7. Try Failure Cases
+### 7. Sign UTXO Ownership from the Terminal
+
+The circuit currently proves snapshot membership and threshold. The terminal
+ownership signer adds a local pre-proof check: each selected UTXO address must
+match a provided Bitcoin private key, and the key must sign the deterministic
+zkPoH ownership challenge.
+
+Preferred key input is a file with one WIF private key per line:
+
+```bash
+chmod 600 /path/to/wifs.txt
+cargo run -- sign-ownership \
+  --snapshot snapshots/regtest_utxo_snapshot.json \
+  --wif-file /path/to/wifs.txt \
+  --output ownership_proof.json \
+  --network regtest
+```
+
+You can also read WIFs from an environment variable. Multiple WIFs may be
+comma-separated:
+
+```bash
+export ZKPOH_WIFS='c...'
+cargo run -- sign-ownership \
+  --snapshot snapshots/regtest_utxo_snapshot.json \
+  --wif-env ZKPOH_WIFS \
+  --output ownership_proof.json \
+  --network regtest
+```
+
+For one-off testing only, pass WIFs directly:
+
+```bash
+cargo run -- sign-ownership \
+  --snapshot snapshots/regtest_utxo_snapshot.json \
+  --wif c... \
+  --output ownership_proof.json \
+  --network regtest
+```
+
+Passing secrets directly in shell commands can leak through shell history and
+process listings. Prefer `--wif-file` or `--wif-env` for terminal use.
+
+The signer writes `ownership_proof.json` containing:
+
+* the canonical ownership challenge
+* the challenge SHA-256 digest
+* the Merkle root
+* each signed UTXO
+* each compressed public key
+* each DER-encoded ECDSA signature
+
+The CLI verifies every signature and checks that each public key maps to the
+UTXO's P2WPKH address before writing the proof file. This is still an off-circuit
+ownership check; future versions may verify Bitcoin signatures inside Noir.
+
+Verify an ownership proof later:
+
+```bash
+cargo run -- verify-ownership \
+  --proof ownership_proof.json \
+  --network regtest
+```
+
+### 8. Try Failure Cases
 
 The Noir tests already cover failure behavior:
 

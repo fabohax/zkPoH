@@ -1,12 +1,16 @@
+mod ownership;
 mod prover;
 mod regtest;
 mod snapshot_builder;
 mod verifier;
 
+use bitcoin::Network;
 use clap::{Parser, Subcommand};
+use std::str::FromStr;
 
 const DEFAULT_SNAPSHOT_PATH: &str = "snapshots/utxo_snapshot.json";
 const DEFAULT_PROVER_TOML_PATH: &str = "Prover.toml";
+const DEFAULT_OWNERSHIP_PROOF_PATH: &str = "ownership_proof.json";
 const DEFAULT_REGTEST_WALLET: &str = "zkpoh-regtest";
 const DEFAULT_REGTEST_SNAPSHOT_PATH: &str = "snapshots/regtest_utxo_snapshot.json";
 const DEFAULT_THRESHOLD_SATS: u64 = 100_000_000;
@@ -50,6 +54,30 @@ enum Commands {
         #[arg(long, default_value = "bitcoin-cli")]
         bitcoin_cli: String,
     },
+    /// Sign a snapshot ownership challenge with Bitcoin WIF private keys.
+    SignOwnership {
+        #[arg(long, default_value = DEFAULT_REGTEST_SNAPSHOT_PATH)]
+        snapshot: String,
+        #[arg(long, default_value = DEFAULT_OWNERSHIP_PROOF_PATH)]
+        output: String,
+        #[arg(long, default_value = "regtest")]
+        network: String,
+        #[arg(long)]
+        nonce: Option<String>,
+        #[arg(long)]
+        wif: Vec<String>,
+        #[arg(long = "wif-file")]
+        wif_files: Vec<String>,
+        #[arg(long = "wif-env")]
+        wif_envs: Vec<String>,
+    },
+    /// Verify a JSON ownership proof produced by sign-ownership.
+    VerifyOwnership {
+        #[arg(long, default_value = DEFAULT_OWNERSHIP_PROOF_PATH)]
+        proof: String,
+        #[arg(long, default_value = "regtest")]
+        network: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -80,7 +108,33 @@ fn main() -> anyhow::Result<()> {
                 min_confirmations,
             })?;
         }
+        Commands::SignOwnership {
+            snapshot,
+            output,
+            network,
+            nonce,
+            wif,
+            wif_files,
+            wif_envs,
+        } => {
+            ownership::sign_ownership(&ownership::SignOwnershipOptions {
+                snapshot,
+                output,
+                network: parse_network(&network)?,
+                nonce,
+                wifs: wif,
+                wif_files,
+                wif_envs,
+            })?;
+        }
+        Commands::VerifyOwnership { proof, network } => {
+            ownership::verify_ownership_file(&proof, parse_network(&network)?)?;
+        }
     }
 
     Ok(())
+}
+
+fn parse_network(network: &str) -> anyhow::Result<Network> {
+    Network::from_str(network).map_err(|error| anyhow::anyhow!("invalid network: {error}"))
 }
