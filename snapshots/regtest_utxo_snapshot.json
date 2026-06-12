@@ -1,0 +1,19 @@
+{
+  "snapshot": "bitcoin-regtest-utxo-snapshot",
+  "timestamp": "2026-06-12T00:00:00Z",
+  "threshold_sats": 100000000,
+  "utxos": [
+    {
+      "txid": "810e4d0cf866404ce1888028bb33af2c012d2a840ce7ee21fae3ebe96fdbd5bf",
+      "vout": 1,
+      "value": 42000000,
+      "address": "bcrt1q9ua8d68xxycq47l8nyjkxc8k52xjxr2gjy7dg3"
+    },
+    {
+      "txid": "810e4d0cf866404ce1888028bb33af2c012d2a840ce7ee21fae3ebe96fdbd5bf",
+      "vout": 2,
+      "value": 58000000,
+      "address": "bcrt1qyckm3ds8qhf23nunfug27sxjgsgmmw5lh67u05"
+    }
+  ]
+}
