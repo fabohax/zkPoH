@@ -27,11 +27,11 @@ This repository prioritizes simplicity and portability over production readiness
 Current implementation status:
 
 * Rust can load the sample snapshot and generate `Prover.toml`.
-* Noir verifies a fixed two-UTXO, one-level Merkle proof.
+* Noir verifies up to four selected UTXOs in a fixed two-level Merkle tree.
 * Noir enforces `sum(values) >= 100_000_000`.
 * Tests cover valid input, below-threshold input, and a wrong Merkle path.
 * The prototype Merkle tree uses Blake2s over fixed byte encodings.
-* Bitcoin ownership is still assumed, not proven.
+* Bitcoin ownership can be checked off-circuit with signed WIF ownership proofs.
 
 ## Architecture
 
@@ -98,8 +98,6 @@ zk-proof-of-hodl/
 │   ├── snapshot_builder.rs
 │   ├── prover.rs
 │   └── verifier.rs
-├── examples/
-├── scripts/
 ├── Nargo.toml
 └── README.md
 ```
@@ -192,23 +190,50 @@ git clone https://github.com/fabohax/zkPoH.git
 cd zkPoH
 ```
 
-Run the Rust and Noir tests:
+Run the full local validation suite:
+
+```bash
+cargo run -- test-all
+```
+
+Or use the Makefile shortcut:
+
+```bash
+make test
+```
+
+You can also run the individual checks directly:
 
 ```bash
 cargo test
 nargo test
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Check the Noir circuit:
 
 ```bash
-nargo check
+cargo run -- check-circuit
 ```
 
 ### 3. Run the Built-In Snapshot
 
 The default snapshot is `snapshots/utxo_snapshot.json`. It contains two example
-UTXOs whose values sum to exactly `100_000_000` sats.
+UTXOs whose values sum to exactly `100_000_000` sats. The circuit supports up
+to four UTXOs; unused slots are padded with empty leaves.
+
+Run the full happy path:
+
+```bash
+cargo run -- demo
+```
+
+Or:
+
+```bash
+make demo
+```
 
 Generate `Prover.toml` from that snapshot:
 
@@ -231,7 +256,7 @@ cargo run -- prove
 Expected result:
 
 ```text
-circuit constraints executed successfully
+zkPoH proof constraints passed
 ```
 
 ### 4. Inspect the Witness Inputs
@@ -251,10 +276,13 @@ The current prototype converts each UTXO into a leaf with:
 leaf = blake2s(txid_tag || vout || value)
 ```
 
-Then it computes the two-leaf Merkle root with:
+Then it pads unused slots with `hash_leaf(0, 0, 0)` and computes a fixed
+four-leaf Merkle root:
 
 ```text
-root = blake2s(left_leaf || right_leaf)
+node_0 = blake2s(leaf_0 || leaf_1)
+node_1 = blake2s(leaf_2 || leaf_3)
+root = blake2s(node_0 || node_1)
 ```
 
 `txid_tag` is currently the final 8 bytes of the Bitcoin txid interpreted as a
@@ -285,7 +313,7 @@ cargo run -- prove \
   --output Prover.toml
 ```
 
-This should solve the Noir witness and report a total of `100000000` sats.
+This should solve the Noir witness and report totals in sats and BTC.
 
 ### 6. Create Fresh Regtest UTXOs
 
@@ -336,9 +364,8 @@ cargo run -- snapshot-regtest \
   --output snapshots/regtest_utxo_snapshot.json
 ```
 
-The command selects the smallest pair of safe, spendable, confirmed UTXOs whose
-combined value meets the threshold. The current circuit expects exactly two
-UTXOs, so the snapshot generator writes exactly two entries.
+The command selects the smallest set of up to four safe, spendable, confirmed
+UTXOs whose combined value meets the threshold.
 
 Then generate and execute the witness:
 
@@ -350,7 +377,7 @@ cargo run -- prove \
 
 #### Manual Snapshot Check
 
-To inspect or build the snapshot manually, list the two UTXOs:
+To inspect or build the snapshot manually, list the selected UTXOs:
 
 ```bash
 bitcoin-cli -regtest -rpcwallet=zkpoh-regtest listunspent \
@@ -519,7 +546,8 @@ The prover controls at least 1 BTC.
 
 * [x] Prototype Merkle membership proofs
 * [x] Prototype 1 BTC threshold proof
-* [ ] Bitcoin regtest snapshot generation
+* [x] Bitcoin regtest snapshot generation
+* [x] Up to four selected UTXOs
 * [ ] Schnorr ownership gadget
 * [ ] Arbitrary threshold support
 * [ ] Utreexo integration

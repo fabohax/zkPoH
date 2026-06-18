@@ -6,6 +6,7 @@ mod verifier;
 
 use bitcoin::Network;
 use clap::{Parser, Subcommand};
+use std::process::Command;
 use std::str::FromStr;
 
 const DEFAULT_SNAPSHOT_PATH: &str = "snapshots/utxo_snapshot.json";
@@ -25,6 +26,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Run the default witness generation and Noir constraint execution.
+    Demo {
+        #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
+        snapshot: String,
+        #[arg(long, default_value = DEFAULT_PROVER_TOML_PATH)]
+        output: String,
+    },
+    /// Run the full local validation suite.
+    TestAll {
+        #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
+        snapshot: String,
+        #[arg(long, default_value = DEFAULT_PROVER_TOML_PATH)]
+        output: String,
+    },
     /// Generate Prover.toml from the sample UTXO snapshot.
     BuildWitness {
         #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
@@ -39,7 +54,9 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_PROVER_TOML_PATH)]
         output: String,
     },
-    /// Check the Noir circuit.
+    /// Check the Noir circuit without solving a witness.
+    CheckCircuit,
+    /// Check the Noir circuit. Prefer check-circuit for clearer wording.
     Verify,
     /// Generate a snapshot from spendable Bitcoin Core regtest wallet UTXOs.
     SnapshotRegtest {
@@ -84,13 +101,38 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Demo { snapshot, output } => {
+            preflight_nargo()?;
+            prover::execute_circuit(&snapshot, &output)?;
+        }
+        Commands::TestAll { snapshot, output } => {
+            preflight_nargo()?;
+            run_command("cargo", &["fmt", "--check"])?;
+            run_command(
+                "cargo",
+                &[
+                    "clippy",
+                    "--all-targets",
+                    "--all-features",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            )?;
+            run_command("cargo", &["test"])?;
+            run_command("nargo", &["test"])?;
+            verifier::check_circuit()?;
+            prover::execute_circuit(&snapshot, &output)?;
+        }
         Commands::BuildWitness { snapshot, output } => {
             prover::generate_witness(&snapshot, &output)?;
         }
         Commands::Prove { snapshot, output } => {
+            preflight_nargo()?;
             prover::execute_circuit(&snapshot, &output)?;
         }
-        Commands::Verify => {
+        Commands::CheckCircuit | Commands::Verify => {
+            preflight_nargo()?;
             verifier::check_circuit()?;
         }
         Commands::SnapshotRegtest {
@@ -100,6 +142,7 @@ fn main() -> anyhow::Result<()> {
             min_confirmations,
             bitcoin_cli,
         } => {
+            preflight_bitcoin_cli(&bitcoin_cli)?;
             regtest::generate_regtest_snapshot(&regtest::RegtestSnapshotOptions {
                 bitcoin_cli,
                 wallet,
@@ -137,4 +180,54 @@ fn main() -> anyhow::Result<()> {
 
 fn parse_network(network: &str) -> anyhow::Result<Network> {
     Network::from_str(network).map_err(|error| anyhow::anyhow!("invalid network: {error}"))
+}
+
+fn preflight_nargo() -> anyhow::Result<()> {
+    let output = Command::new("nargo")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!("nargo is required for this command but was not found: {error}")
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!("nargo is required for this command but did not run successfully");
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout);
+    if !version.contains("1.0.0-beta.7") {
+        println!("warning: README-tested Nargo version is 1.0.0-beta.7");
+        print!("{version}");
+    }
+
+    Ok(())
+}
+
+fn run_command(program: &str, args: &[&str]) -> anyhow::Result<()> {
+    let printable_args = args.join(" ");
+    println!("running: {program} {printable_args}");
+    let status = Command::new(program).args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("{program} {printable_args} failed");
+    }
+    Ok(())
+}
+
+fn preflight_bitcoin_cli(bitcoin_cli: &str) -> anyhow::Result<()> {
+    let output = Command::new(bitcoin_cli)
+        .arg("-version")
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{bitcoin_cli} is required for snapshot-regtest but was not found: {error}"
+            )
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "{bitcoin_cli} is required for snapshot-regtest but did not run successfully"
+        );
+    }
+
+    Ok(())
 }

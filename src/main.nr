@@ -1,5 +1,5 @@
-global SELECTED_UTXOS: u32 = 2;
-global MERKLE_DEPTH: u32 = 1;
+global SELECTED_UTXOS: u32 = 4;
+global MERKLE_DEPTH: u32 = 2;
 global DIGEST_BYTES: u32 = 32;
 global LEAF_PREIMAGE_BYTES: u32 = 24;
 global NODE_PREIMAGE_BYTES: u32 = 64;
@@ -58,11 +58,17 @@ fn verify_merkle_path(
     path: [[u8; DIGEST_BYTES]; MERKLE_DEPTH],
     index: u64,
 ) {
-    let computed_root = if index == 0 {
+    let first_level = if index % 2 == 0 {
         hash_pair(leaf, path[0])
     } else {
-        assert(index == 1);
         hash_pair(path[0], leaf)
+    };
+
+    let computed_root = if index < 2 {
+        hash_pair(first_level, path[1])
+    } else {
+        assert(index < 4);
+        hash_pair(path[1], first_level)
     };
 
     assert(computed_root == root);
@@ -78,27 +84,34 @@ fn main(
 ) {
     let leaf_0 = hash_leaf(txid_tags[0], vouts[0], values[0]);
     let leaf_1 = hash_leaf(txid_tags[1], vouts[1], values[1]);
+    let leaf_2 = hash_leaf(txid_tags[2], vouts[2], values[2]);
+    let leaf_3 = hash_leaf(txid_tags[3], vouts[3], values[3]);
 
     verify_merkle_path(leaf_0, merkle_root, merkle_paths[0], merkle_indices[0]);
     verify_merkle_path(leaf_1, merkle_root, merkle_paths[1], merkle_indices[1]);
+    verify_merkle_path(leaf_2, merkle_root, merkle_paths[2], merkle_indices[2]);
+    verify_merkle_path(leaf_3, merkle_root, merkle_paths[3], merkle_indices[3]);
 
-    let total_value = values[0] + values[1];
+    let total_value = values[0] + values[1] + values[2] + values[3];
     assert(total_value >= THRESHOLD_SATS);
 }
 
 #[test]
-fn valid_two_leaf_witness_passes() {
+fn valid_padded_four_leaf_witness_passes() {
     let leaf_0 = hash_leaf(1, 0, 42000000);
     let leaf_1 = hash_leaf(2, 1, 58000000);
-    let root = hash_pair(leaf_0, leaf_1);
+    let empty_leaf = hash_leaf(0, 0, 0);
+    let node_0 = hash_pair(leaf_0, leaf_1);
+    let node_1 = hash_pair(empty_leaf, empty_leaf);
+    let root = hash_pair(node_0, node_1);
 
     main(
         root,
-        [1, 2],
-        [0, 1],
-        [42000000, 58000000],
-        [[leaf_1], [leaf_0]],
-        [0, 1],
+        [1, 2, 0, 0],
+        [0, 1, 0, 0],
+        [42000000, 58000000, 0, 0],
+        [[leaf_1, node_1], [leaf_0, node_1], [empty_leaf, node_0], [empty_leaf, node_0]],
+        [0, 1, 2, 3],
     );
 }
 
@@ -106,15 +119,18 @@ fn valid_two_leaf_witness_passes() {
 fn below_threshold_witness_fails() {
     let leaf_0 = hash_leaf(1, 0, 41000000);
     let leaf_1 = hash_leaf(2, 1, 58000000);
-    let root = hash_pair(leaf_0, leaf_1);
+    let empty_leaf = hash_leaf(0, 0, 0);
+    let node_0 = hash_pair(leaf_0, leaf_1);
+    let node_1 = hash_pair(empty_leaf, empty_leaf);
+    let root = hash_pair(node_0, node_1);
 
     main(
         root,
-        [1, 2],
-        [0, 1],
-        [41000000, 58000000],
-        [[leaf_1], [leaf_0]],
-        [0, 1],
+        [1, 2, 0, 0],
+        [0, 1, 0, 0],
+        [41000000, 58000000, 0, 0],
+        [[leaf_1, node_1], [leaf_0, node_1], [empty_leaf, node_0], [empty_leaf, node_0]],
+        [0, 1, 2, 3],
     );
 }
 
@@ -122,14 +138,17 @@ fn below_threshold_witness_fails() {
 fn wrong_merkle_path_fails() {
     let leaf_0 = hash_leaf(1, 0, 42000000);
     let leaf_1 = hash_leaf(2, 1, 58000000);
-    let root = hash_pair(leaf_0, leaf_1);
+    let empty_leaf = hash_leaf(0, 0, 0);
+    let node_0 = hash_pair(leaf_0, leaf_1);
+    let node_1 = hash_pair(empty_leaf, empty_leaf);
+    let root = hash_pair(node_0, node_1);
 
     main(
         root,
-        [1, 2],
-        [0, 1],
-        [42000000, 58000000],
-        [[leaf_0], [leaf_0]],
-        [0, 1],
+        [1, 2, 0, 0],
+        [0, 1, 0, 0],
+        [42000000, 58000000, 0, 0],
+        [[leaf_0, node_1], [leaf_0, node_1], [empty_leaf, node_0], [empty_leaf, node_0]],
+        [0, 1, 2, 3],
     );
 }

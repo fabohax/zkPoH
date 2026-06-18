@@ -75,37 +75,72 @@ fn list_unspent(options: &RegtestSnapshotOptions) -> anyhow::Result<Vec<BitcoinC
 }
 
 fn select_utxos(utxos: &[BitcoinCliUtxo], threshold_sats: u64) -> anyhow::Result<Vec<UtxoEntry>> {
-    if SELECTED_UTXOS != 2 {
-        anyhow::bail!("regtest snapshot selection currently expects exactly 2 UTXOs");
+    let values = utxos
+        .iter()
+        .map(|utxo| btc_amount_to_sats(&utxo.amount.to_string()))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut best_selection = Vec::new();
+    let mut best_total = u64::MAX;
+    let mut current_selection = Vec::new();
+
+    search_best_selection(
+        0,
+        &values,
+        threshold_sats,
+        &mut current_selection,
+        &mut best_selection,
+        &mut best_total,
+    );
+
+    if best_selection.is_empty() {
+        anyhow::bail!(
+            "no set of up to {SELECTED_UTXOS} eligible UTXOs meets threshold {threshold_sats}"
+        );
     }
 
-    let mut best_pair = None;
+    Ok(utxos
+        .iter()
+        .enumerate()
+        .filter(|(index, _utxo)| best_selection.contains(index))
+        .map(|(index, utxo)| utxo_entry(utxo, values[index]))
+        .collect())
+}
 
-    for first_index in 0..utxos.len() {
-        for second_index in (first_index + 1)..utxos.len() {
-            let first_value = btc_amount_to_sats(&utxos[first_index].amount.to_string())?;
-            let second_value = btc_amount_to_sats(&utxos[second_index].amount.to_string())?;
-            let total_sats = first_value + second_value;
+fn search_best_selection(
+    start_index: usize,
+    values: &[u64],
+    threshold_sats: u64,
+    current_selection: &mut Vec<usize>,
+    best_selection: &mut Vec<usize>,
+    best_total: &mut u64,
+) {
+    let current_total = current_selection
+        .iter()
+        .map(|index| values[*index])
+        .sum::<u64>();
 
-            if total_sats >= threshold_sats {
-                best_pair = Some((first_index, second_index, first_value, second_value));
-                break;
-            }
-        }
-
-        if best_pair.is_some() {
-            break;
-        }
+    if current_total >= threshold_sats && current_total < *best_total {
+        *best_total = current_total;
+        *best_selection = current_selection.clone();
+        return;
     }
 
-    let Some((first_index, second_index, first_value, second_value)) = best_pair else {
-        anyhow::bail!("no pair of eligible UTXOs meets threshold {threshold_sats}");
-    };
+    if current_selection.len() == SELECTED_UTXOS || current_total >= *best_total {
+        return;
+    }
 
-    Ok(vec![
-        utxo_entry(&utxos[first_index], first_value),
-        utxo_entry(&utxos[second_index], second_value),
-    ])
+    for index in start_index..values.len() {
+        current_selection.push(index);
+        search_best_selection(
+            index + 1,
+            values,
+            threshold_sats,
+            current_selection,
+            best_selection,
+            best_total,
+        );
+        current_selection.pop();
+    }
 }
 
 fn utxo_entry(utxo: &BitcoinCliUtxo, value: u64) -> UtxoEntry {
