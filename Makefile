@@ -16,4 +16,4 @@ build-witness:
 	cargo run -- build-witness
 
 clean-witness:
-	rm -f Prover.toml Prover.regtest.toml target/zk_proof_of_hodl.gz
+	rm -f Prover.toml Prover.regtest.toml target/zkpoh.gz

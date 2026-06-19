@@ -1,4 +1,4 @@
-# zkPoH: Zero Knowledge Proof-of-Hodl
+# zkpoh: Zero Knowledge Proof-of-Hodl
 
 A proof-of-concept demonstrating how to use **Noir** to prove that selected Bitcoin UTXOs have a combined value of at least **1 BTC**, without revealing which UTXOs they are.
 
@@ -87,7 +87,7 @@ Public inputs:
 ## Repository Structure
 
 ```
-zk-proof-of-hodl/
+zkpoh/
 ├── circuits/
 │   ├── merkle.nr
 │   ├── threshold.nr
@@ -166,6 +166,38 @@ This tutorial walks through the current prototype from a clean clone to a
 successful Noir constraint run. In this version, `prove` means "generate witness
 inputs and execute the Noir circuit constraints." It does not yet produce a
 portable cryptographic proof artifact with a separate verifier command.
+
+## Using zkpoh as a Rust Library
+
+The crate exposes the witness, Merkle hashing, ownership proof, regtest snapshot,
+and circuit helper APIs from `src/lib.rs`.
+
+From another local Rust project:
+
+```toml
+[dependencies]
+zkpoh = { path = "../zkPoH" }
+```
+
+Basic witness generation:
+
+```rust
+use zkpoh::{build_witness, format_digest, load_snapshot};
+
+fn main() -> anyhow::Result<()> {
+    let snapshot = load_snapshot("snapshots/utxo_snapshot.json")?;
+    let witness = build_witness(&snapshot)?;
+
+    println!("merkle_root = {}", format_digest(&witness.merkle_root));
+    Ok(())
+}
+```
+
+Run the included example:
+
+```bash
+cargo run --example build_witness
+```
 
 ### 1. Install Requirements
 

@@ -1,5 +1,5 @@
 [package]
-name = "zk_proof_of_hodl"
+name = "zkpoh"
 type = "bin"
 authors = [""]
 

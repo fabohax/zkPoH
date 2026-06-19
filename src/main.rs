@@ -1,13 +1,8 @@
-mod ownership;
-mod prover;
-mod regtest;
-mod snapshot_builder;
-mod verifier;
-
 use bitcoin::Network;
 use clap::{Parser, Subcommand};
 use std::process::Command;
 use std::str::FromStr;
+use zkpoh::{ownership, prover, regtest, verifier};
 
 const DEFAULT_SNAPSHOT_PATH: &str = "snapshots/utxo_snapshot.json";
 const DEFAULT_PROVER_TOML_PATH: &str = "Prover.toml";
@@ -17,7 +12,7 @@ const DEFAULT_REGTEST_SNAPSHOT_PATH: &str = "snapshots/regtest_utxo_snapshot.jso
 const DEFAULT_THRESHOLD_SATS: u64 = 100_000_000;
 
 #[derive(Debug, Parser)]
-#[command(name = "zk-proof-of-hodl")]
+#[command(name = "zkpoh")]
 #[command(about = "Prototype zk Proof-of-Hodl witness and circuit runner")]
 struct Cli {
     #[command(subcommand)]
