@@ -1,22 +1,37 @@
 # zkpoh: Zero Knowledge Proof-of-Hodl
 
-A proof-of-concept demonstrating how to use **Noir** to prove that selected Bitcoin UTXOs have a combined value of at least **1 BTC**, without revealing which UTXOs they are.
+A proof-of-concept demonstrating how to use **Noir** to prove that selected Bitcoin UTXOs from a committed snapshot have a combined value of at least **1 BTC**, without revealing which UTXOs they are.
+
+The current Noir circuit demonstrates private Merkle inclusion plus private
+threshold logic. It does **not yet** prove UTXO ownership inside the circuit.
+Without an ownership binding step, a prover could select arbitrary UTXOs from
+the committed snapshot. The repository includes an off-circuit ownership signer
+for P2WPKH-style experiments, and the intended production direction is to move
+that binding into the ZK proof.
 
 ## Overview
 
-The prover generates a proof for the following statement:
+The current circuit generates a proof for the following statement:
 
 > I know a set of Bitcoin UTXOs belonging to a committed Bitcoin snapshot whose combined value is at least 100,000,000 sats.
 
-The verifier learns only that the statement is true.
+The target ownership-bound statement is stronger:
 
-The proof does not reveal:
+> I know keys or valid ownership signatures for hidden UTXOs in this snapshot whose hidden values sum to at least 100,000,000 sats.
+
+The verifier should learn only that the ownership-bound statement is true.
+
+The Noir proof does not reveal:
 
 * UTXO identifiers,
 * Bitcoin addresses,
 * exact balances,
 * transaction history,
 * private keys.
+
+The current v0 off-circuit ownership JSON does reveal selected UTXO and public
+key data to whoever verifies it. The v1 goal is to verify ownership inside the
+ZK proof so those details remain private.
 
 ## Status
 
@@ -32,6 +47,7 @@ Current implementation status:
 * Tests cover valid input, below-threshold input, and a wrong Merkle path.
 * The prototype Merkle tree uses Blake2s over fixed byte encodings.
 * Bitcoin ownership can be checked off-circuit with signed WIF ownership proofs.
+* Bitcoin ownership is not yet verified by the Noir circuit.
 
 ## Architecture
 
@@ -46,6 +62,9 @@ Publish Merkle Root
        │
        ▼
 Prover selects owned UTXOs
+       │
+       ▼
+Sign ownership challenge
        │
        ▼
 Generate Merkle inclusion proofs
@@ -71,6 +90,42 @@ Public statement:
 ∃ utxos :
     valid_membership(utxos)
 ∧   sum(values) ≥ 100_000_000
+```
+
+This is the statement currently enforced by the Noir circuit. On its own, it
+proves that some hidden UTXOs exist in the committed snapshot and pass the
+threshold. It does not prove that the prover controls those UTXOs.
+
+Ownership must be bound to the same snapshot root, threshold, and verifier
+challenge. Conceptually, the verifier gives the prover a fresh challenge:
+
+```text
+challenge = H(
+  "zkPoH-v1",
+  merkle_root,
+  threshold,
+  verifier_nonce,
+  expiry,
+  context
+)
+```
+
+For each selected UTXO, the prover signs that challenge with the key controlling
+the output. For example, a P2WPKH output should satisfy:
+
+```text
+HASH160(pubkey_i) == scriptPubKey_pubkeyhash_i
+VerifySignature(pubkey_i, challenge, sig_i) == true
+```
+
+The stronger target statement is therefore:
+
+```text
+∃ utxos, pubkeys, signatures :
+    MerkleVerify(utxo_i, merkle_path_i, merkle_root)
+∧   output_is_controlled_by(pubkey_i, utxo_i.scriptPubKey)
+∧   VerifySignature(pubkey_i, challenge, sig_i)
+∧   sum(values) ≥ threshold
 ```
 
 Private witness:
@@ -141,13 +196,17 @@ Current prototype assumptions:
 
 * Bitcoin snapshot is generated off-chain.
 * Snapshot is trusted.
-* UTXO ownership is assumed by the prover.
+* The Noir circuit does not verify UTXO ownership.
+* Off-circuit ownership proofs reveal the selected UTXOs and public keys to the
+  verifier, so they weaken the intended privacy model.
 * No nullifiers are implemented.
 * Proofs represent ownership only at snapshot time.
 
 Future versions may include:
 
-* Schnorr ownership verification,
+* in-circuit P2WPKH ownership verification,
+* Schnorr ownership verification for Taproot x-only output keys,
+* BIP-322-style message signing support for broader Bitcoin script coverage,
 * Utreexo commitments,
 * snapshot epochs,
 * nullifiers,
@@ -462,9 +521,14 @@ cargo run -- prove --snapshot snapshots/regtest_utxo_snapshot.json --output Prov
 ### 7. Sign UTXO Ownership from the Terminal
 
 The circuit currently proves snapshot membership and threshold. The terminal
-ownership signer adds a local pre-proof check: each selected UTXO address must
-match a provided Bitcoin private key, and the key must sign the deterministic
-zkPoH ownership challenge.
+ownership signer implements the simpler **v0 off-circuit ownership check**: each
+selected UTXO address must match a provided Bitcoin private key, and the key
+must sign the deterministic zkPoH ownership challenge.
+
+This prevents the prover from claiming unrelated snapshot UTXOs in the terminal
+workflow, but it is not the final privacy model. Because the verifier checks the
+signatures outside the ZK proof, the verifier may learn the selected UTXOs,
+addresses, public keys, and signatures.
 
 Preferred key input is a file with one WIF private key per line:
 
@@ -512,8 +576,8 @@ The signer writes `ownership_proof.json` containing:
 * each DER-encoded ECDSA signature
 
 The CLI verifies every signature and checks that each public key maps to the
-UTXO's P2WPKH address before writing the proof file. This is still an off-circuit
-ownership check; future versions may verify Bitcoin signatures inside Noir.
+UTXO's P2WPKH address before writing the proof file. This is still an
+off-circuit ownership check.
 
 Verify an ownership proof later:
 
@@ -522,6 +586,25 @@ cargo run -- verify-ownership \
   --proof ownership_proof.json \
   --network regtest
 ```
+
+The intended **v1 in-circuit ownership check** keeps the selected UTXOs,
+pubkeys, signatures, and Merkle paths private. The Noir circuit should verify
+internally that each UTXO belongs to the committed snapshot, each output is
+controlled by the corresponding key or valid signature, each signature is bound
+to the challenge, and the private total passes the threshold. The verifier would
+then see only a valid proof for a public snapshot root, threshold, and
+challenge/context.
+
+Taproot support should ideally verify Schnorr signatures against the x-only
+output key. Broader Bitcoin script support likely needs a BIP-322-style message
+signing design; proving arbitrary script satisfaction inside ZK is a larger
+piece of work.
+
+Lightning channel funding outputs need additional care because they are often
+not simple single-key outputs. Depending on whether the funding output is
+2-of-2 multisig, MuSig2, Taproot key-path, or another construction, the proof
+may need to express unilateral participation, cooperative control, or a
+channel-specific ownership condition without revealing the funding output.
 
 ### 8. Try Failure Cases
 
@@ -568,7 +651,7 @@ Since:
 
 a valid proof is generated.
 
-The verifier learns only:
+With ownership binding integrated into the proof, the verifier learns only:
 
 ```
 The prover controls at least 1 BTC.
