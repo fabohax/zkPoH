@@ -672,3 +672,7 @@ The prover controls at least 1 BTC.
 ## License
 
 MIT
+
+## Discussion
+
+[delvingbitcoin.org/t/zkpoh-zero-knowledge-proof-of-hodl/2699](https://delvingbitcoin.org/t/zkpoh-zero-knowledge-proof-of-hodl/2699)
