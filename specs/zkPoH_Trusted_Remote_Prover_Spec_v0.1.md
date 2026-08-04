@@ -1,4 +1,4 @@
-# zkPoH Blind Trusted Remote Prover
+# zkPoH Trusted Remote Prover
 
 **Technical Integration Specification**
 **Version:** 0.1 - Draft for PoC Implementation
@@ -7,7 +7,9 @@
 
 ## 1. Purpose
 
-This specification defines a hosted zkPoH proof-generation service that maintains Bitcoin chain data, deterministic UTXO snapshots, Merkle indexes, proving circuits, and proving keys.
+This specification defines a **trusted remote prover** for zkPoH. The service maintains Bitcoin chain data, deterministic UTXO snapshots, Merkle indexes, proving circuits, and proving keys, while private proof requests are processed inside a Trusted Execution Environment (TEE).
+
+The primary Version 0.1 privacy model requires the user to verify remote attestation and encrypt the private witness to an ephemeral key bound to the approved TEE workload. The surrounding host transports ciphertext and schedules work but is not intended to access plaintext outpoints, public keys, signatures, amounts, Merkle paths, blindings, or link secrets.
 
 The service accepts a privately submitted proof request, generates a zero-knowledge proof, and returns:
 
@@ -15,25 +17,38 @@ The service accepts a privately submitted proof request, generates a zero-knowle
 2. the signed snapshot manifest used by the proof; and
 3. a signed proof-generation receipt binding the proof to its circuit, public inputs, snapshot, request nonce, and validity period.
 
-The service is **blind with respect to the final verifier**: the verifier does not learn the selected Bitcoin outputs, scripts, public keys, signatures, exact values, or Merkle paths.
+The service is confidential with respect to both the final verifier and, subject to the TEE assumptions in this document, the host operator. The verifier does not learn the selected Bitcoin outputs, scripts, public keys, signatures, exact values, or Merkle paths.
 
-The initial implementation is a **trusted remote prover**, not a witness-private prover. The service can observe the submitted outpoints and ownership witnesses. Transport encryption and operational controls protect those inputs, but ordinary server execution does not cryptographically hide them from the service operator.
+A **conventional trusted remote prover** that can observe plaintext witnesses is defined only as a weaker development and fallback profile. It must not claim host-confidential witness processing or use the attested profile label.
+
+### 1.1 Terminology
+
+| Term | Meaning |
+|---|---|
+| Trusted Execution Environment (TEE) | Hardware-backed isolated execution environment intended to protect code and data from the host operating system and operator. |
+| Remote attestation | Signed evidence used by a client to verify the TEE platform, approved workload measurement, security version, and workload-bound encryption key. |
+| Workload measurement | Cryptographic identity of the approved prover image, configuration, circuit registry, and security-relevant runtime. |
+| Attested confidential prover | Remote prover whose private request is encrypted to and processed inside a client-verified TEE. |
+| Conventional trusted prover | Weaker profile in which the server operator can access plaintext witness data. |
+| Host | Infrastructure outside the TEE, including the operating system, orchestrator, API gateway, storage, and service operator. |
+| Attestation policy | Client rules defining accepted TEE vendors, measurements, security versions, debug state, freshness, and revocation status. |
 
 ## 2. Privacy Claim
 
-Version 0.1 provides:
+The primary attested profile intends to provide:
 
-| Party | Learns selected UTXOs? | Learns private keys? |
+| Party | Intended access to selected UTXOs? | Learns private keys? |
 |---|---:|---:|
 | Final verifier | No | No |
 | Public observer | No | No |
 | Snapshot publisher | Not from snapshot publication alone | No |
-| Remote prover | Yes | No |
+| Host and service operator | No plaintext access, subject to TEE assumptions | No |
+| Attested prover workload | Yes, transiently inside the TEE | No |
 | User wallet | Yes | Yes |
 
-The phrase **blind remote prover** in this document means that the prover produces a proof whose private witness is hidden from the verifier. It does not mean that the witness is hidden from the remote prover.
+The TEE does not create an absolute privacy guarantee. The user still trusts the selected hardware vendor, attestation infrastructure, approved workload, key-binding mechanism, security-version and revocation policy, and stated side-channel defenses.
 
-Any UI, API documentation, or marketing claim must state this distinction plainly.
+In the fallback conventional profile, the host and operator can observe the submitted witness. Any UI, API documentation, receipt, or marketing claim must identify which profile generated a proof.
 
 ## 3. Goals
 
@@ -43,12 +58,15 @@ Any UI, API documentation, or marketing claim must state this distinction plainl
 4. Bind every proof to a deterministic, signed Bitcoin UTXO snapshot.
 5. Authenticate which prover generated the proof and which software/circuit it used.
 6. Prevent replay and proof substitution through canonical contexts, nonces, and expiries.
-7. Minimize retention of outpoints, public keys, signatures, paths, and witness files.
-8. Preserve an upgrade path to confidential-computing or distributed proving.
+7. Encrypt private requests end-to-end from the user wallet to an attested TEE workload.
+8. Bind proof receipts to the workload measurement and attestation evidence.
+9. Minimize retention of outpoints, public keys, signatures, paths, and witness files inside the TEE.
+10. Preserve an upgrade path to distributed proving and stronger side-channel defenses.
 
 ## 4. Non-goals for Version 0.1
 
-- Hiding submitted UTXOs from the remote prover operator.
+- Eliminating all trust in the TEE vendor, attestation service, approved workload, or hardware security boundary.
+- Complete protection against every timing, cache, memory-access, speculative-execution, traffic-analysis, or physical side channel.
 - Sending Bitcoin private keys or seed phrases to the server.
 - Proving that the server deleted submitted data.
 - Eliminating trust in the snapshot publisher.
@@ -59,19 +77,22 @@ Any UI, API documentation, or marketing claim must state this distinction plainl
 
 ## 5. Trust Model
 
-The user trusts the remote prover to:
+For the primary attested profile, the user trusts:
 
-- keep submitted witnesses confidential;
-- run the advertised circuit and prover software;
-- avoid retaining or correlating private requests;
-- use the requested snapshot and context;
-- protect its signing keys and proving infrastructure.
+- the TEE hardware and firmware to enforce its documented isolation boundary;
+- the attestation service to issue fresh and authentic platform evidence;
+- the client attestation policy to accept only approved measurements and security versions;
+- the measured workload to validate requests, use the requested circuit and snapshot, and avoid exporting private witnesses;
+- the workload-bound encryption key to terminate private-request encryption inside the TEE;
+- the implementation's documented side-channel and rollback mitigations.
+
+The user does not need to trust the host operator with plaintext witness confidentiality when all attestation and encryption requirements succeed. The host remains capable of denial of service, traffic observation, scheduling manipulation, and returning stale or malformed data.
 
 The user does **not** trust the prover with Bitcoin private keys. Ownership authorization is produced locally using a challenge signature.
 
 The verifier does not need to trust the prover for the mathematical statement if it independently verifies the ZK proof. The prover signature supplies provenance and policy evidence; it does not replace proof verification.
 
-The verifier separately decides whether to trust or reproduce the signed snapshot root.
+The verifier separately decides whether to trust or reproduce the signed snapshot root. A verifier requiring the attested profile also validates that the receipt binds an acceptable workload measurement and attestation result.
 
 ## 6. High-Level Architecture
 
@@ -86,14 +107,14 @@ The verifier separately decides whether to trust or reproduce the signed snapsho
                         | Snapshot + Merkle Index |
                         +------------+------------+
                                      |
- +-------------+   private request   |   private witness
+ +-------------+ encrypted request  |   ciphertext only to host
  | User Wallet |-------------------->+-------------------+
- | local signer|                                         |
- +------+------+                                         v
-        |                                      +-------------------+
-        |                                      | Remote ZK Prover  |
-        | proof + manifest + receipt            | circuits + keys   |
-        <---------------------------------------+---------+---------+
+ | attestation |                                         |
+ | + signer    |                                         v
+ +------+------+                              +---------------------+
+        |                                      | Attested TEE Prover |
+        | proof + manifest + receipt            | decrypt + prove     |
+        <---------------------------------------+----------+----------+
                                                             |
                                                             | portable proof
                                                             v
@@ -106,9 +127,9 @@ Recommended service boundaries:
 
 ```text
 API gateway
-  -> request validator
-  -> ownership pre-check
-  -> isolated proving worker
+  -> attestation discovery
+  -> ciphertext relay
+  -> attested proving worker
   -> proof verifier
   -> receipt signer
 
@@ -118,7 +139,7 @@ snapshot builder
   -> manifest signer
 ```
 
-The receipt signer and snapshot signer should use separate keys.
+Private-request decryption, ownership pre-checks, witness resolution, and proving must occur inside the measured TEE boundary. The receipt signer and snapshot signer should use separate keys. An attested-profile receipt must be signed inside the TEE or by a signing service that verifies fresh workload evidence and binds the resulting receipt to that evidence.
 
 ## 7. End-to-End Protocol
 
@@ -144,28 +165,43 @@ The user or verifier constructs a proof context containing:
 
 The wallet must independently display and validate the context. It must not blindly sign an opaque digest supplied by the server.
 
-### 7.3 Local ownership authorization
+### 7.3 Attestation and secure channel
+
+Before submitting private inputs, the wallet:
+
+1. obtains fresh attestation evidence and the workload's ephemeral encryption key;
+2. verifies the evidence chain, freshness, TEE debug state, security version, revocation status, and workload measurement;
+3. verifies that the measurement is approved for the requested circuit ID and protocol version;
+4. binds the server endpoint, request nonce, and ephemeral key to the attested session; and
+5. aborts without transmitting private inputs if any attestation-policy check fails.
+
+Ordinary TLS may additionally protect transport metadata, but TLS termination outside the TEE does not satisfy private-witness confidentiality. The private request body must be application-layer encrypted to a key whose possession is bound by attestation to the approved workload.
+
+### 7.4 Local ownership authorization
 
 For every selected P2WPKH UTXO, the wallet signs the canonical challenge digest using the controlling Bitcoin key.
 
 The private key never leaves the wallet. The remote prover receives only the outpoint, compressed public key, and signature.
 
-### 7.4 Remote proof generation
+### 7.5 Attested remote proof generation
 
-The service:
+Inside the attested workload, the service:
 
-1. validates the request schema, nonce, expiry, and supported circuit;
-2. resolves each outpoint in its local snapshot index;
-3. retrieves the exact amount, scriptPubKey, creation metadata, and Merkle path;
-4. checks the submitted signature and script/public-key relationship off-circuit as an early rejection step;
-5. constructs the private circuit witness;
-6. generates the ZK proof;
-7. independently verifies the generated proof;
-8. produces a signed generation receipt;
-9. returns only the proof envelope, public manifest, and receipt; and
-10. destroys transient private request and witness material according to the retention policy.
+1. decrypts the private request and binds it to the attested session and client nonce;
+2. validates the request schema, nonce, expiry, and supported circuit;
+3. resolves each outpoint in an authenticated snapshot index available inside the TEE boundary;
+4. retrieves the exact amount, scriptPubKey, creation metadata, and Merkle path;
+5. checks the submitted signature and script/public-key relationship off-circuit as an early rejection step;
+6. constructs the private circuit witness;
+7. generates the ZK proof;
+8. independently verifies the generated proof;
+9. produces a receipt bound to the workload measurement and attestation evidence;
+10. returns only the proof envelope, public manifest, receipt, and required attestation evidence; and
+11. destroys transient private request and witness material according to the retention policy.
 
-### 7.5 Final verification
+The host must not terminate application-layer witness encryption, resolve plaintext outpoints, pre-check ownership witnesses, or receive plaintext prover diagnostics.
+
+### 7.6 Final verification
 
 The final verifier:
 
@@ -173,9 +209,10 @@ The final verifier:
 2. verifies the circuit ID and ZK proof;
 3. verifies all expected public inputs;
 4. verifies the snapshot manifest signature and snapshot policy;
-5. verifies the generation receipt when prover provenance is required;
-6. checks the verifier nonce, purpose, threshold, snapshot, and expiry; and
-7. optionally checks nullifier uniqueness.
+5. verifies the generation receipt and its workload measurement when the attested profile is required;
+6. verifies attestation freshness or an approved verifiable attestation reference according to policy;
+7. checks the verifier nonce, purpose, threshold, snapshot, and expiry; and
+8. optionally checks nullifier uniqueness.
 
 ## 8. Canonical Challenge
 
@@ -239,7 +276,7 @@ Example request:
 }
 ```
 
-The request body is private server input and must never be returned in the proof envelope or receipt.
+The JSON above represents the plaintext application object inside the wallet and TEE. Over the host-facing API it must be carried in an encrypted request envelope containing only non-sensitive routing data, attestation-session identifiers, ciphertext, and integrity-protected associated data. The plaintext request must never be returned in the proof envelope or receipt.
 
 The initial API may limit input count and support only P2WPKH. Unsupported scripts must fail closed.
 
@@ -395,7 +432,11 @@ receipt_hash = H(
     client_request_nonce,
     created_at,
     expires_at,
-    generator_key_id
+    generator_key_id,
+    execution_profile,
+    tee_platform,
+    workload_measurement,
+    attestation_evidence_hash
 )
 ```
 
@@ -413,13 +454,17 @@ Example:
   "created_at": "2026-08-04T12:01:00Z",
   "expires_at": "2026-08-04T12:10:00Z",
   "generator_key_id": "...",
+  "execution_profile": "attested-confidential",
+  "tee_platform": "implementation-defined",
+  "workload_measurement": "sha256:...",
+  "attestation_evidence_hash": "sha256:...",
   "signature": "..."
 }
 ```
 
 The receipt must not hash or expose a request body containing private inputs. It binds the public result and the client's unlinkable request nonce.
 
-The receipt proves neither snapshot correctness nor ZK statement validity by itself. Those require manifest-policy validation and ZK proof verification.
+The receipt proves neither snapshot correctness nor ZK statement validity by itself. Those require manifest-policy validation and ZK proof verification. It also does not independently prove TEE security; the client or verifier must validate the referenced attestation evidence against its own policy.
 
 ## 16. API Surface
 
@@ -510,7 +555,7 @@ Mitigation: the protocol accepts only locally generated signatures. Wallets reje
 ### 19.2 Query correlation
 
 Attack: the server links outpoints to accounts, IP addresses, or repeated requests.
-Mitigation: minimal authentication, anonymous transport where appropriate, no request retention, standardized contexts, fresh request nonces, and future confidential computing.
+Mitigation: minimal authentication, anonymous transport where appropriate, no request retention, standardized contexts, fresh request nonces, and attested confidential execution.
 
 ### 19.3 Malicious challenge
 
@@ -569,21 +614,40 @@ A verifier policy should specify:
 
 Verification fails closed on unknown circuit IDs, malformed contexts, unsupported scripts, expired proofs, inconsistent manifest hashes, invalid signatures, or public-input mismatch.
 
-## 21. Confidential-Computing Upgrade
+## 21. TEE and Remote-Attestation Requirements
 
-The same API may later be implemented inside a trusted execution environment.
+The primary execution profile requires a TEE and remote attestation. A deployment must name the concrete TEE platform, evidence format, trust roots, verification library, minimum security version, revocation source, and accepted workload measurements.
 
-In that mode:
+The attested flow is:
 
 1. the client verifies a remote attestation measurement;
 2. it encrypts the private request to a key bound to the attested prover image;
 3. the host forwards ciphertext into the enclave;
 4. the enclave resolves witnesses and generates the proof;
-5. the receipt includes the enclave measurement and attestation reference.
+5. the receipt includes the workload measurement and attestation-evidence hash.
 
-This reduces trust in the server operator but introduces trust in the hardware vendor, attestation service, approved binary, and side-channel defenses.
+The workload measurement must cover or authenticate:
 
-Version 0.1 receipts should reserve optional fields for execution-environment evidence without requiring them.
+- request validation and decryption code;
+- circuit registry and allowed circuit IDs;
+- witness construction and proof generation code;
+- proof verification and receipt construction code;
+- snapshot-manifest verification rules;
+- key-release policy;
+- debug-disabled production configuration;
+- security-relevant runtime and dependencies.
+
+Attestation evidence must be fresh and bound to an ephemeral request-encryption key. A reusable server TLS certificate, unsigned enclave public key, or stale attestation report is insufficient.
+
+Snapshot artifacts and proving keys stored outside the TEE must be authenticated before use. Private inputs, decrypted witnesses, and sensitive diagnostics must never be exported from the TEE. Sealed persistent storage is forbidden for user witnesses in Version 0.1.
+
+Snapshot-index access can itself reveal an outpoint through host-observed file offsets, pages, cache activity, or object requests. A deployment must either keep the relevant lookup structure inside protected memory, use an access-pattern-hiding construction, fetch a sufficiently broad fixed dataset independent of the query, or disclose this leakage explicitly. Encryption of record contents alone does not hide access patterns.
+
+This model reduces trust in the server operator but introduces trust in the hardware vendor, attestation service, approved binary, key-release policy, and side-channel defenses. The specification does not claim protection against every platform vulnerability, compromised firmware, physical attack, or traffic-analysis channel.
+
+### 21.1 Conventional fallback profile
+
+A development deployment may use `execution_profile = "conventional-trusted"`. In that profile, the operator can access plaintext witness data, attestation fields are absent, and the required user disclosure must explicitly say so. A verifier policy requiring `attested-confidential` must reject fallback receipts.
 
 ## 22. Testing Requirements
 
@@ -607,16 +671,29 @@ Version 0.1 receipts should reserve optional fields for execution-environment ev
 - manifest mutation invalidates its signature;
 - key rotation and expiration policies behave as specified.
 
-### 22.3 Privacy tests
+### 22.3 Attestation tests
+
+- approved production measurement succeeds;
+- unknown measurement and debug-enabled workload fail;
+- stale, revoked, malformed, or wrong-platform evidence fails;
+- evidence bound to a different ephemeral key fails;
+- ciphertext replayed into a different session fails;
+- fallback-profile receipt fails an attested-only verifier policy;
+- receipt mutation of measurement or evidence hash invalidates its signature.
+
+### 22.4 Privacy tests
 
 - response contains no outpoint, address, script, public key, signature, amount, or path;
 - access and application logs contain no private request fields;
 - job IDs have no deterministic relationship to inputs;
 - error messages do not reveal whether a particular outpoint exists;
 - temporary witness files are absent after success and failure;
-- context tags differ across unrelated contexts.
+- context tags differ across unrelated contexts;
+- the host-facing request contains ciphertext rather than witness fields;
+- host logs and diagnostics cannot access decrypted requests;
+- plaintext ownership pre-check and proving occur only inside the measured workload.
 
-### 22.4 Integration tests
+### 22.5 Integration tests
 
 - deterministic regtest snapshot generation;
 - proof succeeds before spend and fails against a later snapshot after spend;
@@ -650,7 +727,7 @@ Metrics labels must not include outpoints, addresses, public keys, request nonce
 
 Acceptance: wallet, server, circuit, and verifier compute identical hashes from published vectors.
 
-### Phase 1 - Regtest trusted prover
+### Phase 1 - Conventional regtest proving baseline
 
 - build deterministic full regtest snapshot and Merkle index;
 - expose snapshot and proof endpoints;
@@ -661,7 +738,19 @@ Acceptance: wallet, server, circuit, and verifier compute identical hashes from 
 
 Acceptance: a user without local chain data or Noir can obtain a verifier-private proof without sending a Bitcoin private key.
 
-### Phase 2 - Operational hardening
+This phase uses the explicitly weaker `conventional-trusted` profile and must not be presented as host-confidential.
+
+### Phase 2 - Attested confidential regtest prover
+
+- select a concrete TEE platform and attestation format;
+- package request decryption, witness resolution, proving, verification, and receipt creation into the measured workload;
+- encrypt private requests to an attestation-bound ephemeral key;
+- bind receipts to execution profile, workload measurement, and evidence hash;
+- implement client-side attestation policy and negative tests.
+
+Acceptance: the host handles ciphertext only, and the client rejects unapproved, stale, debug-enabled, or incorrectly bound attestation evidence before sending a witness.
+
+### Phase 3 - Operational hardening
 
 - isolated proving workers;
 - strict no-body logging;
@@ -672,7 +761,7 @@ Acceptance: a user without local chain data or Noir can obtain a verifier-privat
 
 Acceptance: private inputs do not appear in configured logs or remain after tested success and failure paths.
 
-### Phase 3 - Independent snapshot trust
+### Phase 4 - Independent snapshot trust
 
 - deterministic testnet snapshot regeneration;
 - multiple manifest publishers or verifier-local reproduction;
@@ -680,19 +769,19 @@ Acceptance: private inputs do not appear in configured logs or remain after test
 
 Acceptance: at least two independent generators produce the same root for an exact block and schema.
 
-### Phase 4 - Stronger server privacy
+### Phase 5 - Stronger confidential execution
 
-- evaluate an attested confidential-computing worker;
-- bind receipts to execution measurements;
+- harden side-channel behavior and workload isolation;
+- evaluate confidential multi-party or distributed proving;
 - evaluate anonymous transport and minimized authentication;
 - document residual side channels.
 
-Acceptance: a client can verify that encrypted witness processing occurred in an approved attested prover image.
+Acceptance: deployment-specific privacy claims are supported by documented controls, tests, and residual-risk analysis beyond the baseline TEE boundary.
 
 ## 25. Repository Deliverables
 
 ```text
-specs/zkPoH_Blind_Trusted_Remote_Prover_Spec_v0.1.md
+specs/zkPoH_Trusted_Remote_Prover_Spec_v0.1.md
 docs/proof-request.schema.json
 docs/proof-envelope.schema.json
 docs/proof-receipt.schema.json
@@ -712,10 +801,12 @@ regtest/remote-prover-demo.sh
 
 Before submission, the client must display language equivalent to:
 
-> Your Bitcoin private keys remain on this device. The remote proof service will learn which outputs you submit, their public keys, values, and the proof purpose. The final verifier will not learn those private proof inputs.
+> Your Bitcoin private keys remain on this device. Your proof inputs will be encrypted to an attested confidential-computing environment running an approved prover workload. The service host is not intended to access the plaintext inputs. This protection depends on the selected hardware, attestation system, approved workload, and documented side-channel assumptions. The final verifier will not learn the private proof inputs.
 
-If the deployment uses confidential computing, the disclosure must describe its attestation and residual trust assumptions rather than claiming absolute server blindness.
+For the conventional fallback profile, the client must instead state:
+
+> This deployment does not provide attested confidential execution. The remote proof-service operator can learn the outputs you submit, their public keys, values, and proof purpose. Your Bitcoin private keys remain on this device, and the final verifier will not learn those private proof inputs.
 
 ## 27. Status
 
-This document defines an experimental trusted-service architecture. It is not a production privacy guarantee, audited custody protocol, consensus proposal, or proof that the remote service cannot retain or correlate submitted information.
+This document defines an experimental attested confidential-proving architecture with an explicitly weaker conventional fallback. It is not a production privacy guarantee, audited TEE design, custody protocol, consensus proposal, or proof that all platform and side-channel attacks are prevented.
