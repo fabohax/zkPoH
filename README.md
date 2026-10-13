@@ -217,17 +217,30 @@ Future versions may include:
 
 ## Requirements
 
-* Noir
-* Nargo
 * Rust
+* Noir / Nargo `1.0.0-rc.4`
+* Barretenberg `bb` `5.0.0` (the version Noir `1.0.0-rc.4` installs itself)
 * Bitcoin Core (optional for regtest experiments)
+
+Install the Noir toolchain:
+
+```bash
+curl -L https://raw.githubusercontent.com/noir-lang/noirup/refs/heads/main/install | bash
+noirup -v 1.0.0-rc.4
+curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+bbup -v 5.0.0
+```
+
+`bbup -nv 1.0.0-rc.4` does not resolve to a bb release yet, so pass the bb
+version explicitly.
 
 ## Using zkPoH
 
 This tutorial walks through the current prototype from a clean clone to a
-successful Noir constraint run. In this version, `prove` means "generate witness
-inputs and execute the Noir circuit constraints." It does not yet produce a
-portable cryptographic proof artifact with a separate verifier command.
+verified proof. `prove` generates the witness inputs, compiles and executes the
+Noir circuit, and runs Barretenberg to produce `target/proof`,
+`target/public_inputs`, and `target/vk`. `verify` checks that proof with
+`bb verify`.
 
 ## Using zkpoh as a Rust Library
 
@@ -266,7 +279,7 @@ cargo run --example build_witness
 Install:
 
 * Rust and Cargo
-* Noir / Nargo `1.0.0-beta.7` or compatible
+* Noir / Nargo `1.0.0-rc.4` and Barretenberg `bb` `5.0.0` (see Requirements)
 * Bitcoin Core, only if you want to run the regtest tutorial
 
 Check the main tools:
@@ -274,6 +287,7 @@ Check the main tools:
 ```bash
 cargo --version
 nargo --version
+bb --version
 bitcoin-cli -version
 ```
 
@@ -341,23 +355,32 @@ Execute the Noir circuit with the generated inputs:
 nargo execute
 ```
 
-Or run the full prototype path:
+Or run the full prototype path, which also produces a Barretenberg proof:
 
 ```bash
 cargo run -- prove
+cargo run -- verify
 ```
 
 Expected result:
 
 ```text
-zkPoH proof constraints passed
+proof written to target/proof, key to target/vk
+...
+proof verified
 ```
+
+The proof's public inputs are the snapshot Merkle root and the threshold in
+sats. A verifier must compare `target/public_inputs` against the snapshot it
+expects; `bb verify` alone only checks that the proof matches whatever public
+inputs it was given.
 
 ### 4. Inspect the Witness Inputs
 
 `Prover.toml` is the input file consumed by `nargo execute`. It contains:
 
 * public `merkle_root`
+* public `threshold_sats`
 * private `txid_tags`
 * private `vouts`
 * private `values`
@@ -370,13 +393,14 @@ The current prototype converts each UTXO into a leaf with:
 leaf = blake2s(txid_tag || vout || value)
 ```
 
-Then it pads unused slots with `hash_leaf(0, 0, 0)` and computes a fixed
-four-leaf Merkle root:
+Then it places the leaves in a depth-16 Merkle tree (up to 65,536 leaves).
+Unused positions hash as `hash_leaf(0, 0, 0)`; empty subtrees are precomputed
+per level so a sparse tree builds quickly. Unused proof slots are padded with
+an empty leaf at a distinct index past the last real leaf:
 
 ```text
-node_0 = blake2s(leaf_0 || leaf_1)
-node_1 = blake2s(leaf_2 || leaf_3)
-root = blake2s(node_0 || node_1)
+node = blake2s(left || right)
+root = node at level 16
 ```
 
 `txid_tag` is currently the final 8 bytes of the Bitcoin txid interpreted as a
@@ -621,7 +645,9 @@ The circuit rejects:
 
 * below-threshold values
 * invalid Merkle paths
-* invalid Merkle indices
+* duplicate Merkle indices (the same UTXO counted twice)
+* Merkle indices at or above `2^MERKLE_DEPTH` (an alias of a lower index)
+* values above the total bitcoin supply (prevents `u64` wrap in the sum)
 
 You can also edit `Prover.toml` manually and run:
 

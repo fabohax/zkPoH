@@ -10,6 +10,8 @@ const DEFAULT_OWNERSHIP_PROOF_PATH: &str = "ownership_proof.json";
 const DEFAULT_REGTEST_WALLET: &str = "zkpoh-regtest";
 const DEFAULT_REGTEST_SNAPSHOT_PATH: &str = "snapshots/regtest_utxo_snapshot.json";
 const DEFAULT_THRESHOLD_SATS: u64 = 100_000_000;
+const NARGO_VERSION: &str = "1.0.0-rc.4";
+const BB_VERSION: &str = "5.0.0";
 
 #[derive(Debug, Parser)]
 #[command(name = "zkpoh")]
@@ -42,7 +44,7 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_PROVER_TOML_PATH)]
         output: String,
     },
-    /// Generate witness inputs and execute the Noir constraints.
+    /// Generate witness, compile, execute, and produce a Barretenberg proof in target/.
     Prove {
         #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
         snapshot: String,
@@ -51,7 +53,7 @@ enum Commands {
     },
     /// Check the Noir circuit without solving a witness.
     CheckCircuit,
-    /// Check the Noir circuit. Prefer check-circuit for clearer wording.
+    /// Verify the proof in target/ with Barretenberg.
     Verify,
     /// Generate a snapshot from spendable Bitcoin Core regtest wallet UTXOs.
     SnapshotRegtest {
@@ -117,18 +119,25 @@ fn main() -> anyhow::Result<()> {
             run_command("cargo", &["test"])?;
             run_command("nargo", &["test"])?;
             verifier::check_circuit()?;
-            prover::execute_circuit(&snapshot, &output)?;
+            preflight_bb()?;
+            prover::prove(&snapshot, &output)?;
+            verifier::verify_proof()?;
         }
         Commands::BuildWitness { snapshot, output } => {
-            prover::generate_witness(&snapshot, &output)?;
+            prover::generate_witness(&snapshot, &output, None)?;
         }
         Commands::Prove { snapshot, output } => {
             preflight_nargo()?;
-            prover::execute_circuit(&snapshot, &output)?;
+            preflight_bb()?;
+            prover::prove(&snapshot, &output)?;
         }
-        Commands::CheckCircuit | Commands::Verify => {
+        Commands::CheckCircuit => {
             preflight_nargo()?;
             verifier::check_circuit()?;
+        }
+        Commands::Verify => {
+            preflight_bb()?;
+            verifier::verify_proof()?;
         }
         Commands::SnapshotRegtest {
             wallet,
@@ -190,11 +199,31 @@ fn preflight_nargo() -> anyhow::Result<()> {
     }
 
     let version = String::from_utf8_lossy(&output.stdout);
-    if !version.contains("1.0.0-beta.7") {
-        println!("warning: README-tested Nargo version is 1.0.0-beta.7");
+    if !version.contains(NARGO_VERSION) {
+        println!("warning: README-tested Nargo version is {NARGO_VERSION}");
         print!("{version}");
     }
 
+    Ok(())
+}
+
+fn preflight_bb() -> anyhow::Result<()> {
+    let output = Command::new("bb")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "bb (Barretenberg) is required for this command but was not found: {error}"
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!("bb is required for this command but did not run successfully");
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    if !version.trim().starts_with(BB_VERSION) {
+        println!("warning: README-tested Barretenberg version is {BB_VERSION}");
+        print!("{version}");
+    }
     Ok(())
 }
 
