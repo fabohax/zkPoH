@@ -1,19 +1,19 @@
 {
-  "snapshot": "bitcoin-regtest-utxo-snapshot",
-  "timestamp": "2026-06-12T00:00:00Z",
+  "snapshot": "bitcoin-regtest-wallet-zkpoh-regtest",
+  "timestamp": "unix:1791412009",
   "threshold_sats": 100000000,
   "utxos": [
     {
-      "txid": "810e4d0cf866404ce1888028bb33af2c012d2a840ce7ee21fae3ebe96fdbd5bf",
+      "txid": "88e58159a38aa3df030ce5cfd920578ca9ed05aaaa04cc90082c2565d379cdb8",
       "vout": 1,
       "value": 42000000,
-      "address": "bcrt1q9ua8d68xxycq47l8nyjkxc8k52xjxr2gjy7dg3"
+      "address": "bcrt1q3dd9pvdd8uxjcu73l5wwc92jjfpamn706gr5th"
     },
     {
-      "txid": "810e4d0cf866404ce1888028bb33af2c012d2a840ce7ee21fae3ebe96fdbd5bf",
-      "vout": 2,
+      "txid": "88e58159a38aa3df030ce5cfd920578ca9ed05aaaa04cc90082c2565d379cdb8",
+      "vout": 0,
       "value": 58000000,
-      "address": "bcrt1qyckm3ds8qhf23nunfug27sxjgsgmmw5lh67u05"
+      "address": "bcrt1q6nfxau4aa840n9ty05h5c8mqcxleat2qhdptzw"
     }
   ]
 }

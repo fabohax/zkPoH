@@ -37,6 +37,9 @@ ZK proof so those details remain private.
 
 ⚠️ Experimental educational project.
 
+See [Current status and development priorities](STATUS.md) for implementation
+gaps, acceptance criteria, and the suggested development order.
+
 This repository prioritizes simplicity and portability over production readiness.
 
 Current implementation status:
