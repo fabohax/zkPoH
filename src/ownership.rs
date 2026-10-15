@@ -1,4 +1,6 @@
-use crate::snapshot_builder::{build_witness, format_digest, load_snapshot, UtxoEntry};
+use crate::snapshot_builder::{
+    build_witness, format_digest, load_snapshot, UtxoEntry, SELECTED_UTXOS,
+};
 use bitcoin::secp256k1::{ecdsa::Signature, Message, Secp256k1};
 use bitcoin::{Address, CompressedPublicKey, Network, PrivateKey};
 use rand::RngCore;
@@ -50,7 +52,8 @@ struct SigningKey {
 
 pub fn sign_ownership(options: &SignOwnershipOptions) -> anyhow::Result<()> {
     let snapshot = load_snapshot(&options.snapshot)?;
-    let witness = build_witness(&snapshot)?;
+    let selected: Vec<usize> = (0..snapshot.utxos.len().min(SELECTED_UTXOS)).collect();
+    let witness = build_witness(&snapshot, &selected)?;
     let nonce = match &options.nonce {
         Some(nonce) => nonce.clone(),
         None => random_nonce(),
