@@ -180,13 +180,46 @@ pub fn leaf_for(utxo: &UtxoEntry) -> anyhow::Result<HashDigest> {
     ))
 }
 
+/// Rejects a snapshot that lists the same outpoint (`txid`, `vout`) more than once.
+/// Distinct Merkle indices cannot catch this: a malformed snapshot can place one output
+/// at several positions, each with a valid path.
+pub fn check_distinct_outpoints(snapshot: &UtxoSnapshot) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(snapshot.utxos.len());
+    for utxo in &snapshot.utxos {
+        if !seen.insert((utxo.txid.to_ascii_lowercase(), utxo.vout)) {
+            anyhow::bail!(
+                "duplicate outpoint in snapshot: {}:{}",
+                utxo.txid,
+                utxo.vout
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The Merkle tree over every UTXO in the snapshot, after validating it.
+pub fn snapshot_tree(snapshot: &UtxoSnapshot) -> anyhow::Result<MerkleTree> {
+    if snapshot.utxos.is_empty() {
+        anyhow::bail!("snapshot must include at least one UTXO");
+    }
+    check_distinct_outpoints(snapshot)?;
+    let leaves = snapshot
+        .utxos
+        .iter()
+        .map(leaf_for)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    MerkleTree::build(&leaves)
+}
+
+/// The public Merkle root a verifier should expect for this snapshot.
+pub fn snapshot_root(snapshot: &UtxoSnapshot) -> anyhow::Result<HashDigest> {
+    Ok(snapshot_tree(snapshot)?.root())
+}
+
 /// Builds the tree over every UTXO in the snapshot and selects `selected` (indices into
 /// `snapshot.utxos`) for the proof. Unused slots point at empty leaves just past the
 /// occupied prefix, so every slot has a distinct index.
 pub fn build_witness(snapshot: &UtxoSnapshot, selected: &[usize]) -> anyhow::Result<WitnessInput> {
-    if snapshot.utxos.is_empty() {
-        anyhow::bail!("snapshot must include at least one UTXO");
-    }
     if selected.is_empty() || selected.len() > SELECTED_UTXOS {
         anyhow::bail!(
             "select between 1 and {SELECTED_UTXOS} UTXOs; got {}",
@@ -204,12 +237,7 @@ pub fn build_witness(snapshot: &UtxoSnapshot, selected: &[usize]) -> anyhow::Res
         anyhow::bail!("snapshot too large for depth {MERKLE_DEPTH} with padding");
     }
 
-    let leaves = snapshot
-        .utxos
-        .iter()
-        .map(leaf_for)
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    let tree = MerkleTree::build(&leaves)?;
+    let tree = snapshot_tree(snapshot)?;
 
     let mut witness = WitnessInput {
         merkle_root: tree.root(),
@@ -391,6 +419,33 @@ mod tests {
             assert_eq!(root, witness.merkle_root, "slot {slot}");
         }
         assert_eq!(witness.merkle_indices, [3, 42, 77, 99]);
+    }
+
+    /// Regression for fabohax/zkPoH#3: one 0.3 BTC output listed four times.
+    #[test]
+    fn duplicate_outpoints_in_snapshot_rejected() {
+        let entry = UtxoEntry {
+            txid: format!("{:064x}", 7),
+            vout: 0,
+            value: 30_000_000,
+            address: "addr7".to_string(),
+        };
+        let snapshot = UtxoSnapshot {
+            snapshot: "dup".to_string(),
+            timestamp: "2026-06-11T00:00:00Z".to_string(),
+            threshold_sats: 100_000_000,
+            utxos: vec![entry.clone(), entry.clone(), entry.clone(), entry],
+        };
+        let error = build_witness(&snapshot, &[0, 1, 2, 3]).unwrap_err();
+        assert!(error.to_string().contains("duplicate outpoint"), "{error}");
+        assert!(snapshot_root(&snapshot).is_err());
+
+        // Same txid, different vout, is a different outpoint and is fine.
+        let mut distinct = snapshot.clone();
+        for (vout, utxo) in distinct.utxos.iter_mut().enumerate() {
+            utxo.vout = vout as u32;
+        }
+        assert!(build_witness(&distinct, &[0, 1, 2, 3]).is_ok());
     }
 
     #[test]

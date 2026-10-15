@@ -93,10 +93,16 @@ fn main(
         total_value += values[i];
     }
 
-    // No leaf may be counted twice: every pair of indices must differ.
+    // No leaf may be counted twice: every pair of indices must differ, and no two
+    // counted slots may name the same outpoint. The outpoint check catches a snapshot
+    // that lists one output several times at different positions. Zero-value slots are
+    // padding and add nothing to the total, so they are exempt from the outpoint check.
     for i in 0..SELECTED_UTXOS {
         for j in (i + 1)..SELECTED_UTXOS {
             assert(merkle_indices[i] != merkle_indices[j], "duplicate utxo");
+            let both_counted = (values[i] != 0) & (values[j] != 0);
+            let same_outpoint = (txid_tags[i] == txid_tags[j]) & (vouts[i] == vouts[j]);
+            assert(!(both_counted & same_outpoint), "duplicate outpoint");
         }
     }
 
@@ -223,6 +229,38 @@ fn duplicate_utxo_fails() {
         [42000000, 58000000, 58000000, 0],
         [tree.paths[0], tree.paths[1], tree.paths[1], tree.paths[3]],
         [0, 1, 1, 3],
+    );
+}
+
+#[test(should_fail_with = "duplicate outpoint")]
+fn duplicate_outpoint_at_distinct_indices_fails() {
+    // Regression for fabohax/zkPoH#3: one 0.3 BTC output listed four times in the
+    // snapshot, at four distinct indices with four valid paths, sums to 1.2 BTC.
+    let leaf = hash_leaf(7, 0, 30000000);
+    let tree = four_leaf_tree([leaf, leaf, leaf, leaf]);
+    main(
+        tree.root,
+        100000000,
+        [7, 7, 7, 7],
+        [0, 0, 0, 0],
+        [30000000, 30000000, 30000000, 30000000],
+        tree.paths,
+        [0, 1, 2, 3],
+    );
+}
+
+#[test]
+fn zero_value_padding_slots_may_share_an_outpoint() {
+    // Two padding slots both carry outpoint (0, 0); they are not counted.
+    let tree = four_leaf_tree(sample_leaves(42000000));
+    main(
+        tree.root,
+        100000000,
+        [1, 2, 0, 0],
+        [0, 1, 0, 0],
+        [42000000, 58000000, 0, 0],
+        tree.paths,
+        [0, 1, 2, 3],
     );
 }
 
