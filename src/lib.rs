@@ -18,4 +18,8 @@ pub use snapshot_builder::{
     write_prover_toml, HashDigest, MerkleTree, UtxoEntry, UtxoSnapshot, WitnessInput, DIGEST_BYTES,
     LEAF_PREIMAGE_BYTES, MAX_LEAVES, MERKLE_DEPTH, NODE_PREIMAGE_BYTES, SELECTED_UTXOS,
 };
-pub use verifier::{check_circuit, verify_proof};
+pub use verifier::{
+    check_circuit, check_public_inputs, check_vk, decode_public_inputs, expected_statement,
+    sha256_hex, trusted_vk_sha256, verify_proof, ExpectedStatement, PUBLIC_INPUTS_BYTES,
+    PUBLIC_INPUT_FIELDS, PUBLIC_INPUT_FIELD_BYTES, TRUSTED_VK_PATH,
+};

@@ -53,8 +53,14 @@ enum Commands {
     },
     /// Check the Noir circuit without solving a witness.
     CheckCircuit,
-    /// Verify the proof in target/ with Barretenberg.
-    Verify,
+    /// Verify the proof in target/: trusted vk, public inputs match the snapshot, bb verify.
+    Verify {
+        #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
+        snapshot: String,
+        /// SHA-256 of the trusted verification key; defaults to trusted_vk.sha256.
+        #[arg(long)]
+        vk_sha256: Option<String>,
+    },
     /// Generate a snapshot from spendable Bitcoin Core regtest wallet UTXOs.
     SnapshotRegtest {
         #[arg(long, default_value = DEFAULT_REGTEST_WALLET)]
@@ -121,7 +127,20 @@ fn main() -> anyhow::Result<()> {
             verifier::check_circuit()?;
             preflight_bb()?;
             prover::prove(&snapshot, &output)?;
-            verifier::verify_proof()?;
+            let trusted_vk = verifier::trusted_vk_sha256()?;
+            verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &trusted_vk)?;
+            // The same proof must not verify for another snapshot or another circuit.
+            let other = verifier::expected_statement(DEFAULT_REGTEST_SNAPSHOT_PATH)?;
+            if verifier::verify_proof(&other, &trusted_vk).is_ok() {
+                anyhow::bail!("proof verified against the wrong snapshot");
+            }
+            println!("proof for the wrong snapshot rejected");
+            let wrong_vk = "0".repeat(64);
+            if verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &wrong_vk).is_ok()
+            {
+                anyhow::bail!("proof verified with an untrusted vk");
+            }
+            println!("proof with an untrusted vk rejected");
         }
         Commands::BuildWitness { snapshot, output } => {
             prover::generate_witness(&snapshot, &output, None)?;
@@ -135,9 +154,16 @@ fn main() -> anyhow::Result<()> {
             preflight_nargo()?;
             verifier::check_circuit()?;
         }
-        Commands::Verify => {
+        Commands::Verify {
+            snapshot,
+            vk_sha256,
+        } => {
             preflight_bb()?;
-            verifier::verify_proof()?;
+            let trusted_vk = match vk_sha256 {
+                Some(digest) => digest,
+                None => verifier::trusted_vk_sha256()?,
+            };
+            verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &trusted_vk)?;
         }
         Commands::SnapshotRegtest {
             wallet,
