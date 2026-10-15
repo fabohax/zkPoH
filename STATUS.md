@@ -1,6 +1,10 @@
 # Current status and development priorities
 
-Reviewed: 2026-10-13.
+Reviewed: 2026-10-13. Updated: 2026-10-15 for the circuit soundness and
+proving work in [#2](https://github.com/fabohax/zkPoH/issues/2),
+[#3](https://github.com/fabohax/zkPoH/issues/3),
+[#4](https://github.com/fabohax/zkPoH/issues/4), and
+[#6](https://github.com/fabohax/zkPoH/issues/6).
 
 zkPoH is an experimental Rust/Noir prototype for private Bitcoin UTXO
 membership and balance-threshold checks. It does not yet implement the complete
@@ -11,15 +15,22 @@ verifiable zero-knowledge proof artifacts.
 ## Implemented today
 
 - Rust library and CLI for loading snapshots and generating Noir witness inputs.
-- A fixed four-leaf Blake2s Merkle tree, with zero-value padding.
-- Noir checks for Merkle membership and a hardcoded 100,000,000-sat threshold.
+- A depth-16 Blake2s Merkle tree (up to 65,536 leaves) built sparsely, with
+  zero-value padding at distinct indices. Snapshots with a repeated outpoint
+  are rejected.
+- Noir checks for Merkle membership, a public `threshold_sats`, distinct
+  indices, distinct outpoints among counted slots, indices below
+  `2^MERKLE_DEPTH`, and per-value bounds that keep the sum from wrapping.
 - Regtest wallet UTXO selection and snapshot generation.
 - Off-circuit P2WPKH ownership signing with WIF keys, and signature verification.
-- Local circuit execution through `nargo execute`.
+- Proof generation with Barretenberg (`prove`) and verification (`verify`)
+  that pins the verification key and checks the public inputs against the
+  snapshot before `bb verify`.
+- CI running `cargo run -- test-all` with Nargo 1.0.0-rc.4 and bb 5.0.0.
 
-The review ran `cargo test` and `nargo test`: all four Rust tests and all three
-Noir tests passed. The Noir tests cover valid input, insufficient balance, and
-an invalid Merkle path. Passing these tests does not establish the stronger
+`test-all` runs 11 Rust tests and 10 Noir tests, then generates a proof,
+verifies it, and checks that it is rejected for a different snapshot and for an
+untrusted verification key. Passing these tests does not establish the stronger
 ownership-bound statement above.
 
 ## Gaps and required development
@@ -44,44 +55,33 @@ Acceptance: wrong keys, wrong signatures, substituted scripts, and mismatched
 challenges fail; a valid ownership-bound proof reveals only its defined public
 inputs.
 
-### 2. Duplicate UTXOs can inflate the total
+### 2. Duplicate UTXOs can inflate the total — done
 
-The circuit verifies each slot independently and then sums all four values.
-It does not require distinct indices or outpoints. From code inspection, the
-same valid 0.3 BTC leaf and path could be supplied four times to satisfy the
-1 BTC threshold. This finding has not yet been reproduced in a dedicated test.
-The normal witness builder uses indices `[0, 1, 2, 3]`, but a prover can construct
-a witness independently of that builder.
+Resolved by #2 and #3. The circuit requires pairwise-distinct Merkle indices,
+indices below `2^MERKLE_DEPTH` (so an index cannot alias a lower one), and
+pairwise-distinct `(txid_tag, vout)` among counted slots. Zero-value padding
+slots are exempt from the outpoint check because they add nothing to the total.
+The snapshot builder rejects a repeated `(txid, vout)` before building the tree.
 
-Required work:
+Regression tests: `duplicate_utxo_fails`, `index_out_of_range_fails`,
+`duplicate_outpoint_at_distinct_indices_fails` (four copies of one 0.3 BTC
+output at indices 0..3) and `zero_value_padding_slots_may_share_an_outpoint` in
+`src/main.nr`; `duplicate_outpoints_in_snapshot_rejected` in
+`src/snapshot_builder.rs`.
 
-- Enforce uniqueness of counted outputs inside the circuit.
-- Reject duplicate outpoints during snapshot construction as well; distinct
-  indices alone cannot prevent a malformed snapshot containing duplicate entries.
-- Define how unused zero-value slots participate in uniqueness checks.
+### 3. Portable proof generation and independent verification — done
 
-Acceptance: repeated selection of one output fails, duplicate snapshot entries
-fail, and valid padded selections still pass.
+Resolved by #2 and #4. `prove` runs `nargo compile`, `nargo execute`, and
+`bb prove --write_vk`, leaving `target/proof`, `target/public_inputs`, and
+`target/vk`. `verify --snapshot <file>` needs no private witness: it checks
+`target/vk` against the pinned `trusted_vk.sha256`, decodes the public inputs
+(33 big-endian 32-byte fields: root bytes in fields 0–31, `threshold_sats` in
+field 32) and compares them to the snapshot's recomputed root and threshold,
+then runs `bb verify`. `demo` / `check-circuit` / `prove` / `verify` are now
+distinct operations.
 
-### 3. Portable proof generation and independent verification are missing
-
-[`src/prover.rs`](src/prover.rs) invokes `nargo execute`, which solves the witness;
-the CLI does not produce a portable cryptographic proof. The `verify` command
-calls `nargo check` through [`src/verifier.rs`](src/verifier.rs), which checks the
-circuit rather than verifying a supplied proof.
-
-Required work:
-
-- Integrate a proof backend compatible with the chosen Noir version.
-- Generate proof artifacts and define their public-input and verification-key
-  formats.
-- Implement a separate verifier that accepts the proof and expected public
-  statement without requiring the private witness.
-- Clarify command names and documentation so circuit execution, compilation,
-  proof generation, and proof verification are distinct operations.
-
-Acceptance: a proof verifies in a separate process; mutations to the proof or
-public inputs fail verification.
+Still open: the verifier recomputes the root from the snapshot file it is given.
+How a verifier accepts a snapshot root in the first place is gap 4.
 
 ### 4. Snapshot commitments are a small prototype
 
@@ -127,17 +127,11 @@ Required work:
 Acceptance: empty proofs, altered envelope fields, insufficient totals,
 duplicate outputs, stale challenges, and invalid signatures fail.
 
-### 6. Threshold configuration is inconsistent
+### 6. Threshold configuration is inconsistent — done
 
-Snapshot JSON and the regtest CLI expose `threshold_sats`, but the active Noir
-circuit always enforces 100,000,000 sats. The witness builder does not use the
-snapshot threshold to configure that circuit.
-
-Required work: either reject unsupported thresholds consistently or make the
-threshold a public circuit input bound to ownership and verifier expectations.
-
-Acceptance: all components agree on the exact threshold; a proof for a lower
-threshold cannot satisfy a verifier requesting a higher one.
+Resolved by #2. `threshold_sats` is a public circuit input taken from the
+snapshot; `verify` rejects a proof whose public threshold differs from the
+snapshot's. Binding the threshold to ownership remains part of gap 1.
 
 ### 7. The remote attested prover remains a specification
 
@@ -156,10 +150,11 @@ a defined policy, with the specification's negative tests.
 
 ## Suggested development order
 
-1. Fix duplicate counting and incomplete off-circuit verification, with targeted
-   regression tests.
-2. Resolve threshold semantics and define canonical snapshot/challenge formats.
-3. Add cryptographic proof generation and independent verification.
+1. ~~Fix duplicate counting~~ (done) and incomplete off-circuit verification
+   (gap 5), with targeted regression tests.
+2. ~~Resolve threshold semantics~~ (done) and define canonical snapshot/challenge
+   formats.
+3. ~~Add cryptographic proof generation and independent verification.~~ (done)
 4. Implement script-bound ownership inside ZK and test the complete statement.
 5. Scale snapshot construction and establish verifier snapshot trust.
 6. Build the remote conventional baseline, then the attested proving architecture.
