@@ -10,6 +10,8 @@ const DEFAULT_OWNERSHIP_PROOF_PATH: &str = "ownership_proof.json";
 const DEFAULT_REGTEST_WALLET: &str = "zkpoh-regtest";
 const DEFAULT_REGTEST_SNAPSHOT_PATH: &str = "snapshots/regtest_utxo_snapshot.json";
 const DEFAULT_THRESHOLD_SATS: u64 = 100_000_000;
+const NARGO_VERSION: &str = "1.0.0-rc.4";
+const BB_VERSION: &str = "5.0.0";
 
 #[derive(Debug, Parser)]
 #[command(name = "zkpoh")]
@@ -42,7 +44,7 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_PROVER_TOML_PATH)]
         output: String,
     },
-    /// Generate witness inputs and execute the Noir constraints.
+    /// Generate witness, compile, execute, and produce a Barretenberg proof in target/.
     Prove {
         #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
         snapshot: String,
@@ -51,8 +53,14 @@ enum Commands {
     },
     /// Check the Noir circuit without solving a witness.
     CheckCircuit,
-    /// Check the Noir circuit. Prefer check-circuit for clearer wording.
-    Verify,
+    /// Verify the proof in target/: trusted vk, public inputs match the snapshot, bb verify.
+    Verify {
+        #[arg(long, default_value = DEFAULT_SNAPSHOT_PATH)]
+        snapshot: String,
+        /// SHA-256 of the trusted verification key; defaults to trusted_vk.sha256.
+        #[arg(long)]
+        vk_sha256: Option<String>,
+    },
     /// Generate a snapshot from spendable Bitcoin Core regtest wallet UTXOs.
     SnapshotRegtest {
         #[arg(long, default_value = DEFAULT_REGTEST_WALLET)]
@@ -117,18 +125,45 @@ fn main() -> anyhow::Result<()> {
             run_command("cargo", &["test"])?;
             run_command("nargo", &["test"])?;
             verifier::check_circuit()?;
-            prover::execute_circuit(&snapshot, &output)?;
+            preflight_bb()?;
+            prover::prove(&snapshot, &output)?;
+            let trusted_vk = verifier::trusted_vk_sha256()?;
+            verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &trusted_vk)?;
+            // The same proof must not verify for another snapshot or another circuit.
+            let other = verifier::expected_statement(DEFAULT_REGTEST_SNAPSHOT_PATH)?;
+            if verifier::verify_proof(&other, &trusted_vk).is_ok() {
+                anyhow::bail!("proof verified against the wrong snapshot");
+            }
+            println!("proof for the wrong snapshot rejected");
+            let wrong_vk = "0".repeat(64);
+            if verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &wrong_vk).is_ok()
+            {
+                anyhow::bail!("proof verified with an untrusted vk");
+            }
+            println!("proof with an untrusted vk rejected");
         }
         Commands::BuildWitness { snapshot, output } => {
-            prover::generate_witness(&snapshot, &output)?;
+            prover::generate_witness(&snapshot, &output, None)?;
         }
         Commands::Prove { snapshot, output } => {
             preflight_nargo()?;
-            prover::execute_circuit(&snapshot, &output)?;
+            preflight_bb()?;
+            prover::prove(&snapshot, &output)?;
         }
-        Commands::CheckCircuit | Commands::Verify => {
+        Commands::CheckCircuit => {
             preflight_nargo()?;
             verifier::check_circuit()?;
+        }
+        Commands::Verify {
+            snapshot,
+            vk_sha256,
+        } => {
+            preflight_bb()?;
+            let trusted_vk = match vk_sha256 {
+                Some(digest) => digest,
+                None => verifier::trusted_vk_sha256()?,
+            };
+            verifier::verify_proof(&verifier::expected_statement(&snapshot)?, &trusted_vk)?;
         }
         Commands::SnapshotRegtest {
             wallet,
@@ -190,11 +225,31 @@ fn preflight_nargo() -> anyhow::Result<()> {
     }
 
     let version = String::from_utf8_lossy(&output.stdout);
-    if !version.contains("1.0.0-beta.7") {
-        println!("warning: README-tested Nargo version is 1.0.0-beta.7");
+    if !version.contains(NARGO_VERSION) {
+        println!("warning: README-tested Nargo version is {NARGO_VERSION}");
         print!("{version}");
     }
 
+    Ok(())
+}
+
+fn preflight_bb() -> anyhow::Result<()> {
+    let output = Command::new("bb")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "bb (Barretenberg) is required for this command but was not found: {error}"
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!("bb is required for this command but did not run successfully");
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    if !version.trim().starts_with(BB_VERSION) {
+        println!("warning: README-tested Barretenberg version is {BB_VERSION}");
+        print!("{version}");
+    }
     Ok(())
 }
 

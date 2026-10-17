@@ -198,7 +198,9 @@ If the condition is not satisfied, proof generation fails.
 Current prototype assumptions:
 
 * Bitcoin snapshot is generated off-chain.
-* Snapshot is trusted.
+* Snapshot is trusted. The verifier recomputes its Merkle root and requires the
+  proof's public root to match it; the snapshot itself is not independently
+  reproduced yet.
 * The Noir circuit does not verify UTXO ownership.
 * Off-circuit ownership proofs reveal the selected UTXOs and public keys to the
   verifier, so they weaken the intended privacy model.
@@ -217,17 +219,31 @@ Future versions may include:
 
 ## Requirements
 
-* Noir
-* Nargo
 * Rust
+* Noir / Nargo `1.0.0-rc.4`
+* Barretenberg `bb` `5.0.0` (the version Noir `1.0.0-rc.4` installs itself)
 * Bitcoin Core (optional for regtest experiments)
+
+Install the Noir toolchain:
+
+```bash
+curl -L https://raw.githubusercontent.com/noir-lang/noirup/refs/heads/main/install | bash
+noirup -v 1.0.0-rc.4
+curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+bbup -v 5.0.0
+```
+
+`bbup -nv 1.0.0-rc.4` does not resolve to a bb release yet, so pass the bb
+version explicitly.
 
 ## Using zkPoH
 
 This tutorial walks through the current prototype from a clean clone to a
-successful Noir constraint run. In this version, `prove` means "generate witness
-inputs and execute the Noir circuit constraints." It does not yet produce a
-portable cryptographic proof artifact with a separate verifier command.
+verified proof. `prove` generates the witness inputs, compiles and executes the
+Noir circuit, and runs Barretenberg to produce `target/proof`,
+`target/public_inputs`, and `target/vk`. `verify` checks that the verification
+key is the trusted one, that the public inputs match the snapshot's root and
+threshold, and then runs `bb verify`.
 
 ## Using zkpoh as a Rust Library
 
@@ -241,19 +257,31 @@ From another local Rust project:
 zkpoh = { path = "../zkPoH" }
 ```
 
-Basic witness generation:
+Basic witness generation. `build_witness` takes the indices of the UTXOs to
+prove (1 to `SELECTED_UTXOS`); the tree is built over the whole snapshot, which
+is rejected if it lists an outpoint twice:
 
 ```rust
 use zkpoh::{build_witness, format_digest, load_snapshot};
 
 fn main() -> anyhow::Result<()> {
     let snapshot = load_snapshot("snapshots/utxo_snapshot.json")?;
-    let witness = build_witness(&snapshot)?;
+    let witness = build_witness(&snapshot, &[0, 1])?;
 
     println!("merkle_root = {}", format_digest(&witness.merkle_root));
+    println!("threshold_sats = {}", witness.threshold_sats);
     Ok(())
 }
 ```
+
+Other entry points:
+
+* `snapshot_root(&snapshot)` is the public root a verifier should expect;
+  `snapshot_tree(&snapshot)` is the `MerkleTree` behind it, with `path(index)`.
+* `prove(snapshot_path, prover_toml_path)` runs the full proving pipeline.
+* `expected_statement(snapshot_path)` and
+  `verify_proof(&expected, trusted_vk_sha256)` are what the `verify` command
+  calls; `decode_public_inputs` and `check_vk` are usable on their own.
 
 Run the included example:
 
@@ -266,7 +294,7 @@ cargo run --example build_witness
 Install:
 
 * Rust and Cargo
-* Noir / Nargo `1.0.0-beta.7` or compatible
+* Noir / Nargo `1.0.0-rc.4` and Barretenberg `bb` `5.0.0` (see Requirements)
 * Bitcoin Core, only if you want to run the regtest tutorial
 
 Check the main tools:
@@ -274,6 +302,7 @@ Check the main tools:
 ```bash
 cargo --version
 nargo --version
+bb --version
 bitcoin-cli -version
 ```
 
@@ -341,23 +370,48 @@ Execute the Noir circuit with the generated inputs:
 nargo execute
 ```
 
-Or run the full prototype path:
+Or run the full prototype path, which also produces a Barretenberg proof:
 
 ```bash
 cargo run -- prove
+cargo run -- verify
 ```
 
 Expected result:
 
 ```text
-zkPoH proof constraints passed
+proof written to target/proof, key to target/vk
+...
+verification key matches trusted_vk.sha256
+public inputs match: merkle_root = d052893a..., threshold_sats = 100000000
+...
+proof verified
 ```
+
+`verify` does three things, in order, and stops at the first failure:
+
+1. Hashes `target/vk` and compares it to `trusted_vk.sha256`. The key is
+   deterministic for a given circuit and `bb` version, so this pins the circuit
+   the proof was made for. After an intentional circuit change, run
+   `make prove` then `make update-trusted-vk` and commit the new digest.
+   `--vk-sha256 <hex>` overrides the file.
+2. Decodes `target/public_inputs` and compares it to the snapshot named by
+   `--snapshot` (default `snapshots/utxo_snapshot.json`): the Merkle root must
+   equal the root recomputed from the snapshot, and the threshold must equal the
+   snapshot's `threshold_sats`. `bb` writes 33 big-endian 32-byte fields: one
+   root byte per field in fields 0–31, `threshold_sats` in field 32.
+3. Runs `bb verify -p target/proof -k target/vk -i target/public_inputs`.
+
+`bb verify` alone only checks that the proof matches whatever inputs and key it
+is handed. `test-all` also checks that the same proof is rejected for a
+different snapshot and for an untrusted key.
 
 ### 4. Inspect the Witness Inputs
 
 `Prover.toml` is the input file consumed by `nargo execute`. It contains:
 
 * public `merkle_root`
+* public `threshold_sats`
 * private `txid_tags`
 * private `vouts`
 * private `values`
@@ -370,13 +424,15 @@ The current prototype converts each UTXO into a leaf with:
 leaf = blake2s(txid_tag || vout || value)
 ```
 
-Then it pads unused slots with `hash_leaf(0, 0, 0)` and computes a fixed
-four-leaf Merkle root:
+The snapshot is rejected if it lists the same `txid:vout` twice. Then the
+leaves go into a depth-16 Merkle tree (up to 65,536 leaves).
+Unused positions hash as `hash_leaf(0, 0, 0)`; empty subtrees are precomputed
+per level so a sparse tree builds quickly. Unused proof slots are padded with
+an empty leaf at a distinct index past the last real leaf:
 
 ```text
-node_0 = blake2s(leaf_0 || leaf_1)
-node_1 = blake2s(leaf_2 || leaf_3)
-root = blake2s(node_0 || node_1)
+node = blake2s(left || right)
+root = node at level 16
 ```
 
 `txid_tag` is currently the final 8 bytes of the Bitcoin txid interpreted as a
@@ -621,7 +677,11 @@ The circuit rejects:
 
 * below-threshold values
 * invalid Merkle paths
-* invalid Merkle indices
+* duplicate Merkle indices (the same leaf counted twice)
+* duplicate outpoints among counted slots (one output listed several times in
+  the snapshot at different positions); zero-value padding slots are exempt
+* Merkle indices at or above `2^MERKLE_DEPTH` (an alias of a lower index)
+* values above the total bitcoin supply (prevents `u64` wrap in the sum)
 
 You can also edit `Prover.toml` manually and run:
 
